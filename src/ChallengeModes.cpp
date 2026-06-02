@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license: https://github.com/azerothcore/azerothcore-wotlk/blob/master/LICENSE-AGPL3
  */
 
@@ -768,12 +768,113 @@ public:
 
 };
 
+// 用于区分挑战模式确认对话的 gossip sender 和 action
+static constexpr uint32 GOSSIP_SENDER_CHALLENGE_CONFIRM = 1;
+static constexpr uint32 GOSSIP_ACTION_CHALLENGE_CANCEL = 1000;
+
 class gobject_challenge_modes : public GameObjectScript
 {
 private:
     static bool playerSettingEnabled(Player* player, uint8 settingIndex)
     {
         return player->GetPlayerSetting("mod-challenge-modes", settingIndex).value;
+    }
+
+    // 根据挑战模式返回对应的被动记录技能 ID
+    static uint32 GetPassiveSkillForChallenge(ChallengeModeSettings setting)
+    {
+        static constexpr uint32 PassiveSkillIds[SETTING_IRON_MAN + 1] =
+        {
+            90109, // HARDCORE
+            90108, // SEMI_HARDCORE
+            90107, // SELF_CRAFTED
+            90106, // ITEM_QUALITY_LEVEL
+            90105, // SLOW_XP_GAIN
+            90104, // VERY_SLOW_XP_GAIN
+            90103, // QUEST_XP_ONLY
+            90102  // IRON_MAN
+        };
+
+        return setting <= SETTING_IRON_MAN ? PassiveSkillIds[setting] : 0;
+    }
+
+    // 给玩家添加挑战模式的记录技能
+    static void GiveChallengeRecordSkill(Player* player, ChallengeModeSettings setting)
+    {
+        if (uint32 spellId = GetPassiveSkillForChallenge(setting); spellId)
+            player->learnSpell(spellId, false, false);
+    }
+
+    // 返回每个挑战模式的说明文本，用于确认对话中展示给玩家
+    static std::string GetChallengeDescription(ChallengeModeSettings setting)
+    {
+        switch (setting)
+        {
+            case SETTING_HARDCORE:
+                return "玩家死亡后将永久变成幽灵，永远无法复活。并直接开启巅峰系统。";
+            case SETTING_SEMI_HARDCORE:
+                return "玩家死亡后将失去所有穿戴的装备和携带的金币。";
+            case SETTING_SELF_CRAFTED:
+                return "玩家只能穿戴自己制作的装备。";
+            case SETTING_ITEM_QUALITY_LEVEL:
+                return "玩家只能穿戴普通或劣质品质的装备。";
+            case SETTING_SLOW_XP_GAIN:
+                return "玩家获得的经验值是正常水平的 0.5 倍。";
+            case SETTING_VERY_SLOW_XP_GAIN:
+                return "玩家获得的经验值只有正常水平的 0.25 倍。";
+            case SETTING_QUEST_XP_ONLY:
+                return "玩家只能通过完成任务获得经验值。";
+            case SETTING_IRON_MAN:
+                return "几乎集齐了以上玩法所有的缺点，你只是在折磨自己。不可组队、交易、使用恢复道具，但你也将直接拥有巅峰系统。";
+            default:
+                return "挑战模式说明。";
+        }
+    }
+
+    static bool CanOfferChallenge(Player* player, ChallengeModeSettings setting)
+    {
+        switch (setting)
+        {
+            case SETTING_HARDCORE:
+            case SETTING_SEMI_HARDCORE:
+                return !playerSettingEnabled(player, SETTING_HARDCORE) && !playerSettingEnabled(player, SETTING_SEMI_HARDCORE);
+            case SETTING_SELF_CRAFTED:
+            case SETTING_IRON_MAN:
+                return !playerSettingEnabled(player, SETTING_SELF_CRAFTED) && !playerSettingEnabled(player, SETTING_IRON_MAN);
+            case SETTING_ITEM_QUALITY_LEVEL:
+                return !playerSettingEnabled(player, SETTING_ITEM_QUALITY_LEVEL);
+            case SETTING_SLOW_XP_GAIN:
+            case SETTING_VERY_SLOW_XP_GAIN:
+                return !playerSettingEnabled(player, SETTING_SLOW_XP_GAIN) && !playerSettingEnabled(player, SETTING_VERY_SLOW_XP_GAIN);
+            case SETTING_QUEST_XP_ONLY:
+                return !playerSettingEnabled(player, SETTING_QUEST_XP_ONLY);
+            default:
+                return false;
+        }
+    }
+
+    // 显示确认启用挑选的对话窗口，并附带模式说明
+    // 说明项使用 GOSSIP_ACTION_INFO_DEF 范围作为可点击项，点击后重新打开当前确认菜单
+    static void SendChallengeConfirm(Player* player, GameObject* go, ChallengeModeSettings setting)
+    {
+        std::string challengeName;
+        switch (setting)
+        {
+            case SETTING_HARDCORE: challengeName = "硬核模式"; break;
+            case SETTING_SEMI_HARDCORE: challengeName = "传奇模式"; break;
+            case SETTING_SELF_CRAFTED: challengeName = "工匠模式"; break;
+            case SETTING_ITEM_QUALITY_LEVEL: challengeName = "流浪模式"; break;
+            case SETTING_SLOW_XP_GAIN: challengeName = "缓速模式"; break;
+            case SETTING_VERY_SLOW_XP_GAIN: challengeName = "乌龟模式"; break;
+            case SETTING_QUEST_XP_ONLY: challengeName = "佣客模式"; break;
+            case SETTING_IRON_MAN: challengeName = "铁人挑战"; break;
+            default: challengeName = "挑战模式"; break;
+        }
+
+        AddGossipItemFor(player, GOSSIP_ICON_CHAT, "说明：" + GetChallengeDescription(setting), GOSSIP_SENDER_CHALLENGE_CONFIRM, GOSSIP_ACTION_INFO_DEF + 1 + setting);
+        AddGossipItemFor(player, GOSSIP_ICON_CHAT, "确认启用" + challengeName + "吗？", GOSSIP_SENDER_CHALLENGE_CONFIRM, setting);
+        AddGossipItemFor(player, GOSSIP_ICON_CHAT, "取消", GOSSIP_SENDER_CHALLENGE_CONFIRM, GOSSIP_ACTION_CHALLENGE_CANCEL);
+        SendGossipMenuFor(player, 12669, go->GetGUID());
     }
 
 public:
@@ -795,48 +896,81 @@ public:
 
     bool OnGossipHello(Player* player, GameObject* go) override
     {
-        if (sChallengeModes->challengeEnabled(SETTING_HARDCORE) && !playerSettingEnabled(player, SETTING_HARDCORE) && !playerSettingEnabled(player, SETTING_SEMI_HARDCORE))
+        // 初始挑战选择对话：点击某一项后进入确认对话
+        if (sChallengeModes->challengeEnabled(SETTING_HARDCORE) && CanOfferChallenge(player, SETTING_HARDCORE))
         {
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "启用极限模式", 0, SETTING_HARDCORE);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "启用硬核模式", 0, SETTING_HARDCORE);
         }
-        if (sChallengeModes->challengeEnabled(SETTING_SEMI_HARDCORE) && !playerSettingEnabled(player, SETTING_HARDCORE) && !playerSettingEnabled(player, SETTING_SEMI_HARDCORE))
+        if (sChallengeModes->challengeEnabled(SETTING_SEMI_HARDCORE) && CanOfferChallenge(player, SETTING_SEMI_HARDCORE))
         {
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "启用半极限模式", 0, SETTING_SEMI_HARDCORE);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "启用传奇模式", 0, SETTING_SEMI_HARDCORE);
         }
-        if (sChallengeModes->challengeEnabled(SETTING_SELF_CRAFTED) && !playerSettingEnabled(player, SETTING_SELF_CRAFTED) && !playerSettingEnabled(player, SETTING_IRON_MAN))
+        if (sChallengeModes->challengeEnabled(SETTING_SELF_CRAFTED) && CanOfferChallenge(player, SETTING_SELF_CRAFTED))
         {
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "启用自制装备模式", 0, SETTING_SELF_CRAFTED);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "启用工匠模式", 0, SETTING_SELF_CRAFTED);
         }
-        if (sChallengeModes->challengeEnabled(SETTING_ITEM_QUALITY_LEVEL) && !playerSettingEnabled(player, SETTING_ITEM_QUALITY_LEVEL))
+        if (sChallengeModes->challengeEnabled(SETTING_ITEM_QUALITY_LEVEL) && CanOfferChallenge(player, SETTING_ITEM_QUALITY_LEVEL))
         {
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "启用低品质装备模式", 0, SETTING_ITEM_QUALITY_LEVEL);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "启用流浪模式", 0, SETTING_ITEM_QUALITY_LEVEL);
         }
-        if (sChallengeModes->challengeEnabled(SETTING_SLOW_XP_GAIN) && !playerSettingEnabled(player, SETTING_SLOW_XP_GAIN) && !playerSettingEnabled(player, SETTING_VERY_SLOW_XP_GAIN))
+        if (sChallengeModes->challengeEnabled(SETTING_SLOW_XP_GAIN) && CanOfferChallenge(player, SETTING_SLOW_XP_GAIN))
         {
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "启用慢速经验模式", 0, SETTING_SLOW_XP_GAIN);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "启用缓速模式", 0, SETTING_SLOW_XP_GAIN);
         }
-        if (sChallengeModes->challengeEnabled(SETTING_VERY_SLOW_XP_GAIN) && !playerSettingEnabled(player, SETTING_SLOW_XP_GAIN) && !playerSettingEnabled(player, SETTING_VERY_SLOW_XP_GAIN))
+        if (sChallengeModes->challengeEnabled(SETTING_VERY_SLOW_XP_GAIN) && CanOfferChallenge(player, SETTING_VERY_SLOW_XP_GAIN))
         {
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "启用极慢经验模式", 0, SETTING_VERY_SLOW_XP_GAIN);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "启用乌龟模式", 0, SETTING_VERY_SLOW_XP_GAIN);
         }
-        if (sChallengeModes->challengeEnabled(SETTING_QUEST_XP_ONLY) && !playerSettingEnabled(player, SETTING_QUEST_XP_ONLY))
+        if (sChallengeModes->challengeEnabled(SETTING_QUEST_XP_ONLY) && CanOfferChallenge(player, SETTING_QUEST_XP_ONLY))
         {
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "启用任务经验专属模式", 0, SETTING_QUEST_XP_ONLY);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "启用佣客模式", 0, SETTING_QUEST_XP_ONLY);
         }
-        if (sChallengeModes->challengeEnabled(SETTING_IRON_MAN) && !playerSettingEnabled(player, SETTING_IRON_MAN) && !playerSettingEnabled(player, SETTING_SELF_CRAFTED))
+        if (sChallengeModes->challengeEnabled(SETTING_IRON_MAN) && CanOfferChallenge(player, SETTING_IRON_MAN))
         {
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "启用铁人模式", 0, SETTING_IRON_MAN);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "启用铁人挑战", 0, SETTING_IRON_MAN);
         }
         SendGossipMenuFor(player, 12669, go->GetGUID());
         return true;
     }
 
-    bool OnGossipSelect(Player* player, GameObject* /*go*/, uint32 /*sender*/, uint32 action) override
+    bool OnGossipSelect(Player* player, GameObject* go, uint32 sender, uint32 action) override
     {
-        player->UpdatePlayerSetting("mod-challenge-modes", action, 1);
-        ChatHandler(player->GetSession()).PSendSysMessage("挑战模式已启用。");
-        CloseGossipMenuFor(player);
-        return true;
+        if (sender == GOSSIP_SENDER_CHALLENGE_CONFIRM)
+        {
+            // 处理确认对话结果：
+            // - 取消按钮直接关闭对话
+            // - 说明项使用 GOSSIP_ACTION_INFO_DEF 范围，点击后重新打开当前确认菜单
+            // - 确认按钮则真正启用挑战并给记录技能
+            if (action == GOSSIP_ACTION_CHALLENGE_CANCEL)
+            {
+                CloseGossipMenuFor(player);
+                return true;
+            }
+            if (action >= GOSSIP_ACTION_INFO_DEF + 1 && action <= GOSSIP_ACTION_INFO_DEF + 1 + SETTING_IRON_MAN)
+            {
+                SendChallengeConfirm(player, go, static_cast<ChallengeModeSettings>(action - (GOSSIP_ACTION_INFO_DEF + 1)));
+                return true;
+            }
+            if (action <= SETTING_IRON_MAN && CanOfferChallenge(player, static_cast<ChallengeModeSettings>(action)))
+            {
+                player->UpdatePlayerSetting("mod-challenge-modes", action, 1);
+                GiveChallengeRecordSkill(player, static_cast<ChallengeModeSettings>(action));
+                ChatHandler(player->GetSession()).PSendSysMessage("挑战模式已开启。");
+                CloseGossipMenuFor(player);
+                return true;
+            }
+            CloseGossipMenuFor(player);
+            return true;
+        }
+
+        // 初始对话里点击挑战选项时，跳转到确认对话
+        if (action <= SETTING_IRON_MAN)
+        {
+            SendChallengeConfirm(player, go, static_cast<ChallengeModeSettings>(action));
+            return true;
+        }
+
+        return false;
     }
 
     GameObjectAI* GetAI(GameObject* object) const override
