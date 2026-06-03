@@ -58,7 +58,11 @@ ChallengeModes.Enable = 1
 #        The IDs used are achievement entry IDs. The format is the level followed by the achievement ID, separated by commas.
 #        Example: <Challenge>.AchievementReward = "80 1234"
 #
-
+ChallengeModes.AllowClientSelection = 1
+#        ChallengeModes.AllowClientSelection
+#        说明：是否开放客户端自选模式（可通过修改客户端，实现界面选择登录选模式）
+#            0=禁用客户端自选，只能靠原版NPC神像开启挑战
+#            1=开启自定义客户端选择功能
 Hardcore.Enable = 1
 Hardcore.TitleRewards = ""
 Hardcore.XPMultiplier = 1
