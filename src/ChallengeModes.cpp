@@ -226,6 +226,59 @@ const std::unordered_map<uint8, uint32> *ChallengeModes::getAchievementMapForCha
     }
     return {};
 }
+class ChallengeMode_PlayerCreateScript : public PlayerScript
+{
+public:
+    ChallengeMode_PlayerCreateScript() : PlayerScript("ChallengeMode_PlayerCreateScript") {}
+
+    void OnPlayerLogin(Player* player) override
+{
+    if (player->GetTotalPlayedTime() > 0)
+        return;
+    if (!sChallengeModes->allowClientSelection)
+        return;
+
+    uint32 mask = player->GetPlayerSetting("temp_challenge_flag", 0).GetValue();
+    player->SetPlayerSetting("temp_challenge_flag", 0, 0);
+    if (mask == 0) return;
+
+    // 掩码数组：下标=客户端i-1=服务端ModeID，值=掩码数值
+    const uint32 bitMask[8] = {1,2,8,16,32,64,128,256};
+    // 对应被动技能ID，和你原有PassiveSkillIds一致
+    const uint32 spellList[8] = {90109,90108,90107,90106,90105,90104,90103,90102};
+
+    for(uint8 modeId = 0; modeId < 8; modeId++)
+    {
+        // 当前位被选中
+        if(mask & bitMask[modeId])
+        {
+            ChallengeModeSettings setting = (ChallengeModeSettings)modeId;
+            // 复用原来神像的互斥规则CanOfferChallenge逻辑，冲突则跳过开启
+            bool canOpen = false;
+            switch(setting)
+            {
+                case SETTING_HARDCORE:
+                case SETTING_SEMI_HARDCORE:
+                    canOpen = !player->GetPlayerSetting("mod-challenge-modes",SETTING_HARDCORE).value && !player->GetPlayerSetting("mod-challenge-modes",SETTING_SEMI_HARDCORE).value; break;
+                case SETTING_SELF_CRAFTED:
+                case SETTING_IRON_MAN:
+                    canOpen = !player->GetPlayerSetting("mod-challenge-modes",SETTING_SELF_CRAFTED).value && !player->GetPlayerSetting("mod-challenge-modes",SETTING_IRON_MAN).value; break;
+                case SETTING_SLOW_XP_GAIN:
+                case SETTING_VERY_SLOW_XP_GAIN:
+                    canOpen = !player->GetPlayerSetting("mod-challenge-modes",SETTING_SLOW_XP_GAIN).value && !player->GetPlayerSetting("mod-challenge-modes",SETTING_VERY_SLOW_XP_GAIN).value; break;
+                default:
+                    canOpen = !player->GetPlayerSetting("mod-challenge-modes",setting).value; break;
+            }
+
+            if(canOpen && sChallengeModes->challengeEnabled(setting))
+            {
+                player->UpdatePlayerSetting("mod-challenge-modes", setting, 1);
+                player->learnSpell(spellList[modeId], false);
+                ChatHandler(player->GetSession()).PSendSysMessage("|cff00ff00成功开启一项挑战模式|r");
+            }
+        }
+    }
+}
 
 class ChallengeModes_WorldScript : public WorldScript
 {
@@ -260,7 +313,8 @@ private:
 
     static void LoadConfig()
     {
-        sChallengeModes->challengesEnabled = sConfigMgr->GetOption<bool>("ChallengeModes.Enable", false);
+        ChallengeModes->challengesEnabled = sConfigMgr->GetOption<bool>("ChallengeModes.Enable", false);
+        sChallengeModes->allowClientSelection = sConfigMgr->GetOption<bool>("ChallengeModes.AllowClientSelection", true);
         if (sChallengeModes->enabled())
         {
             for (auto& [confName, rewardMap] : sChallengeModes->rewardConfigMap)
@@ -854,7 +908,6 @@ private:
     }
 
     // 显示确认启用挑选的对话窗口，并附带模式说明
-    // 说明项使用 GOSSIP_ACTION_INFO_DEF 范围作为可点击项，点击后重新打开当前确认菜单
     static void SendChallengeConfirm(Player* player, GameObject* go, ChallengeModeSettings setting)
     {
         std::string challengeName;
@@ -982,6 +1035,7 @@ public:
 // Add all scripts in one
 void AddSC_mod_challenge_modes()
 {
+    new ChallengeMode_PlayerCreateScript();
     new ChallengeModes_WorldScript();
     new gobject_challenge_modes();
     new ChallengeMode_Hardcore();
