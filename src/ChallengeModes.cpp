@@ -8,6 +8,7 @@ ChallengeModes* ChallengeModes::instance()
 {
     static ChallengeModes instance;
     return &instance;
+    
 }
 
 bool ChallengeModes::challengeEnabledForPlayer(ChallengeModeSettings setting, Player* player) const
@@ -276,10 +277,10 @@ public:
                 player->learnSpell(spellList[modeId], false);
                 ChatHandler(player->GetSession()).PSendSysMessage("|cff00ff00成功开启一项挑战模式|r");
             }
-        }
+        }   
     }
 }
-
+}
 class ChallengeModes_WorldScript : public WorldScript
 {
 public:
@@ -463,12 +464,13 @@ public:
 
     void OnPlayerLogin(Player* player) override
     {
-        if (!sChallengeModes->challengeEnabledForPlayer(SETTING_HARDCORE, player) || !sChallengeModes->challengeEnabledForPlayer(HARDCORE_DEAD, player))
+        if (!sChallengeModes->challengeEnabledForPlayer(SETTING_HARDCORE, player) || !player->GetPlayerSetting(HARDCORE_DEAD, player))
+        if (player->GetPlayerSetting("mod-challenge-modes", HARDCORE_DEAD).GetValue() != 1)
         {
             return;
         }
         player->KillPlayer();
-        player->GetSession()->KickPlayer(std::string("极限模式角色已死亡"));
+        player->GetSession()->KickPlayer("极限模式角色已死亡");
     }
 
     void OnPlayerReleasedGhost(Player* player) override
@@ -478,39 +480,59 @@ public:
             return;
         }
         player->UpdatePlayerSetting("mod-challenge-modes", HARDCORE_DEAD, 1);
-        player->GetSession()->KickPlayer(std::string("极限模式角色已死亡"));
+        player->GetSession()->KickPlayer("极限模式角色已死亡");
     }
 
-    void OnPlayerPVPKill(Player* /*killer*/, Player* killed) override
-    {
-        if (!sChallengeModes->challengeEnabledForPlayer(SETTING_HARDCORE, killed))
-        {
-            return;
-        }
-        killed->UpdatePlayerSetting("mod-challenge-modes", HARDCORE_DEAD, 1);
-    }
+  // 1. 玩家被玩家杀死 (PVP)
+void OnPlayerPVPKill(Player* killer, Player* killed) override
+{
+    HandleHardcoreDeath(killer, killed);
+}
 
-    void OnPlayerKilledByCreature(Creature* /*killer*/, Player* killed) override
-    {
-        if (!sChallengeModes->challengeEnabledForPlayer(SETTING_HARDCORE, killed))
-        {
-            return;
-        }
-        killed->UpdatePlayerSetting("mod-challenge-modes", HARDCORE_DEAD, 1);
-    }
+// 2. 玩家被怪物杀死 (PVE)
+void OnPlayerKilledByCreature(Creature* killer, Player* killed) override
+{
+    HandleHardcoreDeath(killer, killed);
+}
 
-    void OnPlayerResurrect(Player* player, float /*restore_percent*/, bool& /*applySickness*/) override
+// 3. 统一处理：死亡标记 + 全服公告（死了就触发！）
+void HandleHardcoreDeath(WorldObject* killer, Player* killed)
+{
+    // 没开硬核模式 → 直接跳过
+    if (!sChallengeModes->challengeEnabledForPlayer(SETTING_HARDCORE, killed))
+        return;
+
+    // 标记：硬核模式已死亡
+    killed->UpdatePlayerSetting("mod-challenge-modes", HARDCORE_DEAD, 1);
+
+    // ==============================================
+    // 全服死亡公告
+    // ==============================================
+    std::string zoneName = "an unknown area";
+    if (AreaTableEntry const* area = sAreaTableStore.LookupEntry(killed->GetZoneId()))
+        zoneName = area->area_name[killed->GetSession()->GetSessionDbcLocale()];
+
+    std::string color = "|cff00ccff";
+    std::string killerName = killer->GetName();
+    std::string msg = "[Hardcore] " + color + killed->GetName() +
+        "|r was killed by " + color + killerName +
+        "|r in " + color + zoneName +
+        "|r at level " + color + std::to_string(killed->GetLevel()) + "|r!";
+
+    // 发送全服公告
+    sWorld->SendServerMessage(SERVER_MSG_STRING, msg);
+}
+
+// 4. 禁止复活 → 死亡就踢下线
+void OnPlayerResurrect(Player* player, float /*restore_percent*/, bool& /*applySickness*/) override
+{
+    if (sChallengeModes->challengeEnabledForPlayer(SETTING_HARDCORE, player) &&
+        player->GetPlayerSetting("mod-challenge-modes", HARDCORE_DEAD).GetValue() == 1)
     {
-        if (!sChallengeModes->challengeEnabledForPlayer(SETTING_HARDCORE, player))
-        {
-            return;
-        }
-        // A better implementation is to not allow the resurrect but this will need a new hook added first
-        player->UpdatePlayerSetting("mod-challenge-modes", HARDCORE_DEAD, 1);
         player->KillPlayer();
-        player->GetSession()->KickPlayer(std::string("极限模式角色已死亡"));
+        player->GetSession()->KickPlayer("极限模式角色已死亡");
     }
-
+}
     void OnPlayerGiveXP(Player* player, uint32& amount, Unit* victim, uint8 xpSource) override
     {
         ChallengeMode::OnPlayerGiveXP(player, amount, victim, xpSource);
@@ -569,6 +591,12 @@ public:
         {
             return true;
         }
+         //允许携带袋子和容器，无论其制作者是谁
+        if (pItem->GetTemplate()->Class == ITEM_CLASS_CONTAINER)
+        {
+            return false;
+        }
+            return true;
         if (!pItem->GetTemplate()->HasSignature())
         {
             return false;

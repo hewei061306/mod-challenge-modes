@@ -12,6 +12,7 @@
 #include "ItemTemplate.h"
 #include "GameObjectAI.h"
 #include "Pet.h"
+#include "WorldSession.h"
 #include <map>
 
 

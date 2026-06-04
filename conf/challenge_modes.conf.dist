@@ -58,6 +58,7 @@ ChallengeModes.Enable = 1
 #        The IDs used are achievement entry IDs. The format is the level followed by the achievement ID, separated by commas.
 #        Example: <Challenge>.AchievementReward = "80 1234"
 #
+
 ChallengeModes.AllowClientSelection = 1
 #        ChallengeModes.AllowClientSelection
 #        说明：是否开放客户端自选模式（可通过修改客户端，实现界面选择登录选模式）
